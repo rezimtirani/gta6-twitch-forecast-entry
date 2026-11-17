@@ -24,8 +24,8 @@ one simultaneous global unlock) differs from the case's, and zero weight
 for launches flagged weak or early-access-contaminated.  The baseline is
 the median of the category's points from 14 days to 1 day before release.
 
-Four ensemble members are averaged in log space (each smoothed over
-neighbouring hours, window +-1):
+The ensemble (MEMBERS below) is averaged in log space; every member is
+smoothed over neighbouring hours (window +-1):
   A: kernel-weighted mean of L_h, normal quantiles, bw(m)=2.0, bw(s)=0.7
   B: kernel-weighted mean of L_h, normal quantiles, bw(m)=1.5, bw(s)=1.0,
      spread x0.85
@@ -34,15 +34,29 @@ neighbouring hours, window +-1):
   D: hybrid -- mean centre with empirical-quantile spread around the
      weighted median
 
-The ensemble was chosen by leave-one-out cross-validation over the 37
-usable comparable launches in the kit (pinball loss on the log scale,
-the contest's metric): ~0.20-0.22 on rolling-midnight launches like
-GTA VI's, vs ~0.35 for the house persistence baseline.  Rolling-midnight
-console launches are GTA VI's regime: it unlocks at midnight local,
-New Zealand first (11:00Z Nov 18), UK at 00:00Z, US East at 05:00Z, so
-hour 1 already carries Australasian/Japanese play plus the UK unlock,
-and the audience then ramps through the day into the European evening
-and US afternoon/evening peak (hours ~16-24 UTC).
+Validation
+----------
+Chosen by leave-one-out cross-validation over the 37 usable comparable
+launches in the kit, scoring the shipped program end to end (pinball
+loss on the log scale, the contest's metric): 0.465 overall, 0.206 on
+rolling-midnight launches, 0.193 on GTA-like ones (rolling, hour-1
+viewers > 30k, clean), 0.154 on the largest launches (hour-1 > 300k),
+vs 0.930 / 0.363 / 0.352 / 0.226 for the house persistence baseline.
+Variants tried and rejected on the same cross-validation: blending
+toward persistence or toward the global mean curve when the kernel's
+effective sample size is small (worse everywhere), year-decay weights
+(worse), per-hour sigma/bias calibration from leave-one-out residuals
+(worse), pre-launch ramp-slope and viewers-per-channel features (no
+gain), k-nearest neighbours instead of the Gaussian kernel (worse), and
+widening quantiles by cross-member disagreement (neutral on rolling
+launches).  The plain ensemble above was best on every GTA-relevant
+subset, so it ships as-is.
+
+Rolling-midnight console launches are GTA VI's regime: it unlocks at
+midnight local, New Zealand first (11:00Z Nov 18), UK at 00:00Z, US
+East at 05:00Z, so hour 1 already carries Australasian/Japanese play
+plus the UK unlock, and the audience then ramps through the day into
+the European evening and US afternoon/evening peak (hours ~16-24 UTC).
 
 Standard library only, no network, deterministic (no randomness).
 """
@@ -65,6 +79,21 @@ LEVELS = [0.05, 0.25, 0.5, 0.75, 0.95]
 Z = [-1.6448536269514722, -0.6744897501960817, 0.0,
      0.6744897501960817, 1.6448536269514722]
 HOURS = list(range(1, 24))  # offsets 1..23 == hours 2..24
+
+# Ensemble members: (kernel features with bandwidths, kind, sigma scale).
+# kind: "normal-mean" (weighted mean centre, normal quantiles),
+# "emp" (weighted empirical quantiles), "hybrid" (mean centre,
+# empirical-quantile spread around the weighted median).
+MEMBERS = [
+    ([("m", 2.0), ("s", 0.7), ("pre1", 1.5), ("pre12", 1.5)],
+     "normal-mean", 1.0),
+    ([("m", 1.5), ("s", 1.0), ("pre1", 1.5), ("pre12", 1.5)],
+     "normal-mean", 0.85),
+    ([("m", 1.5), ("s", 1.0), ("pre1", 1.5), ("pre12", 1.5)],
+     "emp", 1.0),
+    ([("m", 1.5), ("s", 1.0), ("pre1", 1.5), ("pre12", 1.5)],
+     "hybrid", 1.0),
+]
 
 
 def parse_time(t):
@@ -294,20 +323,8 @@ def forecast_case(case):
                                                 for q in row]}
                           for h, row in zip(HOURS, rows)]}
 
-    members = [
-        member_forecast(tgt, comps,
-                        [("m", 2.0), ("s", 0.7), ("pre1", 1.5), ("pre12", 1.5)],
-                        "normal-mean", sig_scale=1.0),
-        member_forecast(tgt, comps,
-                        [("m", 1.5), ("s", 1.0), ("pre1", 1.5), ("pre12", 1.5)],
-                        "normal-mean", sig_scale=0.85),
-        member_forecast(tgt, comps,
-                        [("m", 1.5), ("s", 1.0), ("pre1", 1.5), ("pre12", 1.5)],
-                        "emp"),
-        member_forecast(tgt, comps,
-                        [("m", 1.5), ("s", 1.0), ("pre1", 1.5), ("pre12", 1.5)],
-                        "hybrid"),
-    ]
+    members = [member_forecast(tgt, comps, feats, kind, sig_scale)
+               for feats, kind, sig_scale in MEMBERS]
     hours = []
     for idx, h in enumerate(HOURS):
         qs = []
